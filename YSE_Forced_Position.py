@@ -43,7 +43,7 @@ phot_band_dict = {'https://ziggy.ucolick.org/yse/api/photometricbands/216/':'g',
 
 ### This is FITS Header boilerplate stuff from Mark ###
 default_stamp_header = fits.Header()
-default_stamp_header['XTENSION'] = 'BINTABLE'         
+default_stamp_header['XTENSION'] = 'BINTABLE'
 default_stamp_header['BITPIX']  = 8
 default_stamp_header['NAXIS']   = 2
 default_stamp_header['NAXIS1']  = 476
@@ -223,14 +223,14 @@ def getRADecBox(ra,dec,size=None):
     invcosdec = max(1.0/np.cos(dec*np.pi/180.0),
                     1.0/np.cos(minDec  *np.pi/180.0),
                     1.0/np.cos(maxDec  *np.pi/180.0))
-    
-    while ra<0.0: ra+=360.0
-    while ra>=360.0: ra-=360.0
 
     ramin = ra-0.5*RAboxsize*invcosdec
     ramax = ra+0.5*RAboxsize*invcosdec
     decmin = dec-0.5*DECboxsize
     decmax = dec+0.5*DECboxsize
+
+    if ra<0.0: ra+=360.0
+    if ra>=360.0: ra-=360.0
 
     if ramin!=None:
         if (ra-ramin)<-180:
@@ -269,7 +269,7 @@ class YSE_Forced_Pos:
                             help="don't download fits files if set")
         parser.add_argument('--checkfiles', default=False, action="store_true",
                             help="won't analyze objects for which files already exist")
-        
+ 
         parser.add_argument(
             '--ysepzurl',type=str,default='https://ziggy.ucolick.org/yse',
             help='base URL for YSE-PZ, so you can reach the API and get field IDs')
@@ -347,8 +347,7 @@ class YSE_Forced_Pos:
             data.add_row((count,camera,'null','null','stamp',2049,'byid','stack',stack_id,'RINGS.V3',
                           skycell_str,2,ra,dec,width,height,'null','null',0,0,'null',0,0,'stack.for.%s'%snid) )
             count += 1
-        
-        if not self.options.nofitsdownload:    
+        if submitrequest:
             hdr = default_stamp_header.copy()
             request_name = 'YSE-stamp.%i'%(time.time())
             hdr['REQ_NAME'] = request_name
@@ -356,12 +355,12 @@ class YSE_Forced_Pos:
 
             s = BytesIO()
             ff.writeto(s, overwrite=True)
-            
+
             self.submit_to_ipp(s)
             return request_name,skycelldict,transient_list,ra_list,dec_list,0
         else:
-            None,skycelldict,transient_list,ra_list,dec_list,0
-
+            return None,skycelldict,transient_list,ra_list,dec_list,0
+        
     def stamp_request_stack(
             self,transient_list,ra_list,dec_list,camera_list,diff_id_list,
             warp_id_list,stack_id_list,width=300,height=300,skycelldict=None):
@@ -452,6 +451,7 @@ class YSE_Forced_Pos:
                 camera_list = np.append(camera_list,get_camera(r['image_id']))
         if not len(transient_list):
             return [],1
+
         
         request_names = []
         count = 0
@@ -601,7 +601,6 @@ class YSE_Forced_Pos:
         tree = html.fromstring(stamps_page.content)
         fitsfiles = tree.xpath('//a/text()')
         
-
         image_dict = {}
 
         for k in mdc_stamps.keys():
@@ -725,7 +724,8 @@ class YSE_Forced_Pos:
                         shutil.copyfileobj(fits_response.raw, fout)
 
                     ff = fits.open(outfile)
-                    if not self.options.nofitsdownload: fits_to_png(ff,outfile.replace('fits','png'),log=('diff' not in img_key_in))
+                    if 'diff' in img_key_in: fits_to_png(ff,outfile.replace('fits','png'),log=False)
+                    else: fits_to_png(ff,outfile.replace('fits','png'),log=True)
                     img_dict[k][img_key_out] += [outfile.replace('{}/'.format(basedir),'')]
                     img_dict[k][img_key_out+'_png'] += [outfile.replace('{}/'.format(basedir),'').replace('.fits','.png')]
 
@@ -755,14 +755,15 @@ class YSE_Forced_Pos:
     def main(self):
 
         if self.options.ra is not None and self.options.dec is not None and self.options.name is not None:
+            self.all_stages([self.options.name],[self.options.ra],[self.options.dec])
             if self.options.checkfiles and os.path.exists(f'{self.options.outdir}/{self.options.name}_phot.dat'): pass
             else: self.all_stages([self.options.name],[self.options.ra],[self.options.dec])
         elif self.options.coordlist:
             name,ra,dec = np.loadtxt(self.options.coordlist,delimiter=',',dtype=str,unpack=True)
-            ra,dec = ra.astype(float),dec.astype(float) 
+            ra,dec = ra.astype(float),dec.astype(float)
             keep = [not os.path.exists(f'{self.options.outdir}/{obj}_phot.dat') for obj in name] if self.options.checkfiles else np.ones_like(name, dtype=bool)
-            self.all_stages(name[keep],ra[keep],dec[keep])
-            
+            if np.array(keep).sum(): self.all_stages(name[keep],ra[keep],dec[keep])
+
     def all_stages(self,namelist,ralist,declist):
         #### main function ####
 
@@ -859,21 +860,21 @@ For now, doing first 1000 images only.
             _,skycelldict,transient_list,ra_list,dec_list,status = self.stamp_request(
                 obs_data_dict,submitrequest=False)
         ### 2b) request the photometry
-        phot_request_names, status = self.forcedphot_request(
+        phot_request_names,status = self.forcedphot_request(
             obs_data_dict,skycelldict)
         if self.options.nofitsdownload and status:
             print('No images were found')
             return
-
+            
         print('submitted phot requests:')
         for prn in phot_request_names: print(prn)
 
         ### 2c) check status of the stamp images/photometry jobs ###
-        print('jobs were submitted, waiting up to 20 minutes for them to finish')
+        print('jobs were submitted, waiting up to 25 minutes for them to finish')
         # wait until the jobs are done
         jobs_done = False
         tstart = time.time()
-        while not jobs_done and time.time()-tstart < 1200:
+        while not jobs_done and time.time()-tstart < 1500:
             print('waiting 60 seconds to check status...')
             time.sleep(60)
             if not self.options.nofitsdownload:
@@ -885,14 +886,17 @@ For now, doing first 1000 images only.
             if not self.options.nofitsdownload and done_stamp and doneall_phot: jobs_done = True
             elif self.options.nofitsdownload and doneall_phot: jobs_done = True
 
-        if not jobs_done: raise RuntimeError('job timeout!')
+            
+        if not jobs_done:
+            raise RuntimeError('job timeout!')
 
         ### 2d) download the stamp images
-        img_dict = self.get_stamps(stamp_request_name,transient_list)
+        if not self.options.nofitsdownload:
+            img_dict = self.get_stamps(stamp_request_name,transient_list)
 
         # save the data
-        phot_dict = self.get_phot(phot_request_names,transient_list,ra_list,dec_list,img_dict)
-        #if not self.options.nofitsdownload:
+        phot_dict = \
+            self.get_phot(phot_request_names,transient_list,ra_list,dec_list,{})
         self.write_photometry(phot_dict)
 
         ### 3. template images
@@ -930,6 +934,7 @@ For now, doing first 1000 images only.
             self.get_all_images(img_dict,stack_img_dict)
         
         return
+
 
         
 if __name__ == "__main__":
