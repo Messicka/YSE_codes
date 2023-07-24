@@ -471,7 +471,7 @@ class YSE_Forced_Pos:
             data_table['flux_err'] = np.sqrt(data_table['gal_err']**2 + data_table['diff_err']**2)
 
             with open(f"{self.options.outdir}/{t}_phot.dat",'w') as fout:
-                print('# mjd filt exp_time zpt diff_flux diff_err gal_flux gal_err flux flux_err gal_flag dq',file=fout)
+                print('mjd filt exp_time zpt diff_flux diff_err gal_flux gal_err flux flux_err gal_flag dq',file=fout)
                 for m,f,exp,zpt,df,dfe,gf,gfe,fl,fle,flag,dq in data_table['mjd','filt','exptime','zpt','diff_flux','diff_err','gal_flux','gal_err','flux','flux_err','gal_flag','dq']:
                     print(f"{m:.3f} {f} {exp} {zpt:.4f} {df:.4f} {dfe:.4f} {gf:.4f} {gfe:.4f} {fl:.4f} {fle:.4f} {flag} {dq}",file=fout)
         
