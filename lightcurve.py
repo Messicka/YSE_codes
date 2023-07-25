@@ -25,7 +25,7 @@ if false, will discard all negative values and plot magnitudes")
 args = parser.parse_args()
 
 if args.file is None:
-	if args.prefix is None or args.number is None:
+	if None in [args.prefix,args.number]:
 		infile = input("Please specify a file location: ")
 	else: infile = f"{args.dir}/{args.prefix}{args.number:05.0f}_phot.dat"
 else: infile = args.file
@@ -45,16 +45,22 @@ bands = [x for x in bands_all if x in np.unique(clean_df['filt'])]
 colors = [colors_all[i] for i, x in enumerate(bands_all) if x in bands]
 for i, b in enumerate(bands):
 	c_data = clean_df[clean_df['filt']==b]
+	col = c=colors[i]
 	if args.keep_negs:
-		plt.errorbar('mjd', 'flux', yerr='flux_err', data=c_data, c=colors[i])
-		plt.axhline(c_data['gal_flux'].values[0], ls='--', c=colors[i])
+		plt.errorbar('mjd', 'flux', yerr='flux_err', data=c_data, c=col)
+		plt.axhline(c_data['gal_flux'].values[0], ls='--', c=col)
 	else:
-		plt.errorbar('mjd', 'mag', yerr='mag_err', data=c_data, c=colors[i])
-		plt.axhline(23.9-2.5*np.log10(c_data['gal_flux'].values[0]), ls='--', c=colors[i])
+		plt.errorbar('mjd', 'mag', yerr='mag_err', data=c_data, c=col)
+		plt.axhline(23.9-2.5*np.log10(c_data['gal_flux'].values[0]), ls='--', c=col)
 
 ax = plt.gca()
+x1, x2 = ax.get_xlim()
+y1, y2 = ax.get_ylim()
+asp = np.abs((x2-x1)/(y2-y1))
+print(x1,x2,y1,y2,asp)
+ax.set_aspect(asp)
 if not args.keep_negs: ax.invert_yaxis()
-plt.legend(bands)
+plt.legend(bands,loc='lower left',bbox_to_anchor=(1.0,0.0))
 plt.title(infile.rsplit('_',1)[0].rsplit('/',1)[1])
 plt.xlabel('MJD')
 plt.ylabel('Flux' if args.keep_negs else 'Mag')
