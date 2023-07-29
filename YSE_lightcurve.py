@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 # D. Jones - 6/21/23
+# A. Messick - 6/28/23
 ### Query IPP forced photometry for any given ra,dec
 
 import numpy as np
@@ -16,12 +17,10 @@ from astropy.wcs import WCS
 from photutils.aperture import SkyCircularAperture, ApertureStats
 import time
 from io import BytesIO
-#import re
 from lxml import html
 import tempfile
 import shutil
 import pylab as plt
-import copy
 from astropy.time import Time
 
 def date_to_mjd(date):
@@ -33,10 +32,10 @@ def mjd_to_date(mjd):
     return time.isot
 
 ### hack to get photometric band names - avoids one more API query ###
-phot_band_dict = {'https://ziggy.ucolick.org/yse/api/photometricbands/119/':'i',
-                  'https://ziggy.ucolick.org/yse/api/photometricbands/120/':'z',
-                  'https://ziggy.ucolick.org/yse/api/photometricbands/211/':'g',
-                  'https://ziggy.ucolick.org/yse/api/photometricbands/212/':'r',
+phot_band_dict = {'https://ziggy.ucolick.org/yse/api/photometricbands/119/':None,	#'i',
+                  'https://ziggy.ucolick.org/yse/api/photometricbands/120/':None,     #'z',
+                  'https://ziggy.ucolick.org/yse/api/photometricbands/211/':None,     #'g',
+                  'https://ziggy.ucolick.org/yse/api/photometricbands/212/':None,     #'r',
                   'https://ziggy.ucolick.org/yse/api/photometricbands/216/':'g',
                   'https://ziggy.ucolick.org/yse/api/photometricbands/217/':'r',
                   'https://ziggy.ucolick.org/yse/api/photometricbands/218/':'i',
@@ -146,34 +145,72 @@ default_forcedphot_header['OBSCODE']  = '566     '
 default_forcedphot_header['STAGE']    = 'WSdiff  '
 default_forcedphot_header['EMAIL']    = 'yse@qub.ac.uk'
 
-def getskycell(ra,dec):
+def getskycell(ra,dec,user,pwd):
+    """
+    Finds the skycell from the PanSTARRS pipeline associated with a given RA and Dec
 
-	session = requests.Session()
-	session.auth = ('ps1sc','skysurveys')
-	skycellurl = 'http://pstamp.ipp.ifa.hawaii.edu/findskycell.php'
+    parameters
+    --------
+    ra  : float; right ascension
+    dec : float; declination
+    user: str; IfA username
+    pwd : str; IfA password
+
+    returns
+    --------
+    skycell: str; name of the resulting skycell
+    """
+    session = requests.Session()
+    session.auth = (user,pwd)
+    skycellurl = 'http://pstamp.ipp.ifa.hawaii.edu/findskycell.php'
 	
-	# First login. Returns session cookie in response header. Even though status_code=401, it is ok
-	page = session.post(skycellurl)
+    # First login. Returns session cookie in response header. Even though status_code=401, it is ok
+    page = session.post(skycellurl)
+    info = {'ra': (None, ra), 'dec': (None, dec)}
+    page = session.post(skycellurl, data=info)
 
-	info = {'ra': (None, ra), 'dec': (None, dec)}
-	page = session.post(skycellurl, data=info)
-
-	skycell = page.text.split("<tr><td>RINGS.V3</td><td>skycell.")[-1].split('</td>')[0]
-	xpos = page.text.split("<tr><td>RINGS.V3</td><td>skycell.")[-1].split('<td>')[1].split('</td>')[0]
-	ypos = page.text.split("<tr><td>RINGS.V3</td><td>skycell.")[-1].split('<td>')[2].split('</td>')[0]
+    skycell = page.text.split("<tr><td>RINGS.V3</td><td>skycell.")[-1].split('</td>')[0]
+    #xpos = page.text.split("<tr><td>RINGS.V3</td><td>skycell.")[-1].split('<td>')[1].split('</td>')[0]
+    #ypos = page.text.split("<tr><td>RINGS.V3</td><td>skycell.")[-1].split('<td>')[2].split('</td>')[0]
 	
-	return skycell,xpos,ypos
+    return skycell
 
 
 ### just a regex for the cameras using exp name ### 
 def get_camera(exp_name):
-    if 'g' in exp_name: return 'GPC1'
-    elif 'h' in exp_name: return 'GPC2'
-    else: return 'None'
+    """
+    Parses the PanSTARRS ceamera from an image_id
+    
+    parameters
+    --------
+    exp_name: str; PanSTARRS image ID
+
+    returns
+    --------
+    cam: str; the camera that made the given observation
+    """
+    if exp_name[0] == 'o' and exp_name[-1] == 'o':
+        if 'g' in exp_name: cam = 'GPC1'
+        elif 'h' in exp_name: cam = 'GPC2'
+        else: cam = 'None'
+
+    return cam
 
 
 ### making PNG files ###
 def fits_to_png(ff,outfile=None):
+    """
+    Creates a png image of an observation from a fits file and either saves or returns it
+
+    parameters
+    --------
+    ff     : FITs object; a fits object of the observation
+    outfile: str; a location to save the PNG file
+
+    returns
+    --------
+    plt: matplotlib object; an object containing the created plot
+    """
     plt.clf()
     ax = plt.axes()
     fim = ff[1].data
@@ -197,11 +234,17 @@ def fits_to_png(ff,outfile=None):
 
 def fluxToMicroJansky(adu, exptime, zp):
     """
-    A function used to convert from Analog-to-Digital Units to microJanskys
+    Converts from Analog-to-Digital Units to microJanskys
 
+    parameters
+    --------
     adu    : float or array; observed ADU value(s)
     exptime: float or array; exposure time(s)
     zp     : float or array; zero-point(s)
+
+    returns
+    ---------
+    uJy; float or array; the resulting fluxes in microJanskys
     """
 
     factor = 10**(0.4*(23.9-zp))
@@ -209,6 +252,18 @@ def fluxToMicroJansky(adu, exptime, zp):
     return uJy
 
 def parse_mdc(mdc_text):
+    """
+    Parses the mdc(?) from the text given from text from the
+    IPP stamps page
+
+    parameters
+    --------
+    mdc_text: str; string of text from the IPP website
+
+    returns
+    --------
+    mdc: dict; dictionary containing the individualized mdc(?)
+    """
 
     mdc = {}
     for line in mdc_text.split('\n'):
@@ -224,6 +279,21 @@ def parse_mdc(mdc_text):
     return mdc
 
 def getRADecBox(ra,dec,size=None):
+    """
+    Defines a box in coordinate space around a given RA and Dec
+
+    parameters
+    --------
+    ra : float; right ascension
+    dec: float; declination
+
+    returns
+    --------
+    ramin : minimum right ascension
+    ramax : maximum right ascension
+    decmin: minimum declination
+    decmax: maximum declination
+    """
     RAboxsize = DECboxsize = size
 
     # get the maximum 1.0/cos(DEC) term: used for RA cut
@@ -257,7 +327,19 @@ class YSE_Forced_Pos:
     def __init__(self):
         pass
 
-    def add_args(self,parser=None, usage=None, config=None):
+    def add_args(self,parser=None, usage=None):
+        """
+        Parses the arguments from the command line at runtime
+
+        parameters
+        --------
+        parser: argparse ArgumentParser; initializaed parser object onto which to save the arguments
+        usage : str; usage string to pass into parser initialization
+
+        returns
+        --------
+        parser: argparse ArgumentParser; parser object with arguments attached
+        """
 
         if parser == None:
             parser = argparse.ArgumentParser(
@@ -270,7 +352,7 @@ class YSE_Forced_Pos:
         parser.add_argument('-d','--dec', type=float, default=None,
                             help='Dec')
         parser.add_argument('-c','--coordlist', type=str, default=None,
-                            help='coordinate list')
+                            help='file location of coordinate list')
         parser.add_argument('-o','--outdir', type=str, default=None,
                             help='output directory for images and photometry files')
         parser.add_argument('--use_csv', default=False, action="store_true",
@@ -296,38 +378,37 @@ class YSE_Forced_Pos:
 
         return parser
 
-    def request_forcedphot(self,obs_table,skycelldict=None,submitrequest=True):
+    def request_forcedphot(self,targ_table,obs_table,skycelldict):
         """
-        A function that inputs an obs_data_dict for a table of transients, creates a stamp dictionary,
-        and (optionally) sends the request
+        Inputs a table of transients, finds the corresponding difference images, and sends the request to the IPP
 
-        obs_data_dict: dictionary; Contains the names, coordinates (ra & dec), mjd, bands,
-                                   and diff IDs for all the images for each galaxy
-        skycelldict  : dictionary; Contains the skycells for the image
-        submitrequest:       bool; Decides if the request is submitted to the IPP 
+        parameters
+        --------
+        targ_table : astropy Table; contains the transient IDs, RAs, and Decs
+        obs_table  : astropy Table; contains the names, coordinates (ra & dec), filters, diff IDs,
+                     mjds, and cameras for all the images for each transient
+        skycelldict: dict; contains the skycells for the images
+
+        returns
+        --------
+        request_names: list of str; list of requests 
         """
-        
-        transient_unq, idx = np.unique(obs_table['transient_id'],return_index=True)
-        if skycelldict is None:
-            skycelldict = {}
-            for snid,ra,dec in obs_table['transient_id','ra','dec'][idx]:
-                skycelldict[snid] = 'skycell.'+getskycell(ra,dec)[0]
         
         request_names = []
         diff_count =  0
         diff_hdr = at.Table(names=('ROWNUM','PROJECT','RA1_DEG','DEC1_DEG','RA2_DEG','DEC2_DEG','FILTER','MJD-OBS','FPA_ID','COMPONENT_ID'),
                              dtype=('S20','S16','>f8','>f8','>f8','>f8','S20','>f8','>i4','S64'))
-        for snid in transient_unq:
+        for trans_id in targ_table['transient_id']:
             diff_data = diff_hdr.copy()
-            id_match = (obs_table['transient_id'] == snid)
-            for ra,dec,mjd,filt,camera,diff_id, in obs_table['ra','dec','obs_mjd','photometric_band','camera','diff_id'][id_match]:
-                if diff_id is not None and diff_id != 'NULL':
-                    diff_data.add_row((f'forcedphot_ysebot_{diff_count}',camera,ra,dec,ra,dec,filt,mjd,diff_id,skycelldict[snid]))
+            for name,ra,dec,filt,diff_id,mjd,cam in obs_table:
+                if name == trans_id:
+                    diff_data.add_row((f'forcedphot_ysebot_{diff_count}',cam,ra,dec,ra,dec,filt,mjd,diff_id,skycelldict[name]))
                     diff_count += 1
 
             if len(diff_data):
+                request_name = f'YSE-phot.{trans_id}.{diff_id}.{int(time.time())}'
+                request_names += [request_name]
                 hdr = default_forcedphot_header.copy()
-                request_name = f'YSE-phot.{snid}.{diff_id}.{int(time.time())}'
                 hdr['QUERY_ID'] = request_name
                 hdr['EXTNAME'] = 'MOPS_DETECTABILITY_QUERY'
                 hdr['EXTVER'] = '2'
@@ -337,14 +418,28 @@ class YSE_Forced_Pos:
                 s = BytesIO()
                 ff.writeto(s, overwrite=True)
                 self.submit_to_ipp(s)
-                request_names += [request_name]
             else:
-                print(f'warning: no diff IDs for transient {snid_unq}')
+                print(f'No diff IDs for transient {trans_id}!')
 
-        return request_names, skycelldict
+        return request_names
 
-    def request_templates(self,trans_data,width=300,height=300,skycelldict=None):
-        
+    def request_templates(self,trans_data,skycelldict,width=300,height=300):
+        """
+        Requests the templates/stack images for given transient objects
+
+        parameters
+        --------
+        trans_data : astropy Table; contains the names, stack IDs, coordinates (ra & dec),
+                     and cameras for the transients
+        skycelldict: dict; contains the skycells for the images
+        width      : float; width of the requested stamp image
+        height     : float; height of the requested stamp image
+
+        returns
+        ---------
+        requestname: str; name of the request sent to the IPP
+        """
+
         data = at.Table(names=('ROWNUM', 'PROJECT', 'SURVEY_NAME', 'IPP_RELEASE', 'JOB_TYPE',
                                'OPTION_MASK', 'REQ_TYPE', 'IMG_TYPE', 'ID', 'TESS_ID',
                                'COMPONENT', 'COORD_MASK', 'CENTER_X', 'CENTER_Y', 'WIDTH',
@@ -354,15 +449,9 @@ class YSE_Forced_Pos:
                                'S64','>i4','>f8','>f8','>f8','>f8','S64','S16','>f8','>f8',
                                'S16','>f8','>f8','S64'))
 
-        trans_unq, idx = np.unique(trans_data['transient_id'], return_index=True)
-        if skycelldict is None:
-            skycelldict = {}
-            for trans_id,ra,dec in trans_data['stack_id','ra','dec'][idx]:
-                skycelldict[trans_id] = 'skycell.'+getskycell(ra,dec)[0]
-
         count = 1
-        for stack_id,ra,dec,camera,trans_id in trans_data:
-            if stack_id is None: continue
+        for trans_id,stack_id,ra,dec,camera in trans_data:
+            if stack_id in [None,'None','NULL']: continue
             skycell_str = skycelldict[trans_id]
             data.add_row((count,camera,'null','null','stamp',2049,'byid','stack',stack_id,'RINGS.V3',
                           skycell_str,2,ra,dec,width,height,'null','null',0,0,'null',0,0,f'stack.for.{trans_id}'))
@@ -376,161 +465,171 @@ class YSE_Forced_Pos:
         s = BytesIO()
         ff.writeto(s, overwrite=True)
         self.submit_to_ipp(s)
-        return request_name,skycelldict
+        return request_name
 
 
     def get_phot(self,request_names,trans_data):
-        trans_list = trans_data['transient_id']
-        ra_list = trans_data['ra']
-        dec_list = trans_data['dec'] 
-        sct = SkyCoord(ra_list,dec_list,unit=u.deg)
+        """
+        Parses the results of the difference image request, and saves the flux and other information
 
-        phot_dict = {}
+        parameters
+        --------
+        request_names: list of str; contains the names of the phot requests previously sent to the IPP
+        trans_data   : astropy Table; contains the names, coordinates (ra & dec), filters, diff IDs,
+                       mjds, and cameras for the observations of each transient
+
+        returns
+        --------
+        phot_table: astropy Table; contains the names, stack IDs, mjd, filters, exposure times, zero-
+                    points, difference flux and error, a quality flag, coordinates (ra & dec), and
+                    cameras for the resulting difference images
+        """
+        phot_table = at.Table(names=('transient_id','stack_id','mjd','filt','exp_time',
+                                     'zpt','diff_flux','diff_err','dq','ra','dec','camera'),
+                              dtype=(str,str,float,str,*[float]*7,str))
         phot_link = 'http://datastore.ipp.ifa.hawaii.edu/pstampresults/'
         rn_len = len(request_names)
         for i, request_name in enumerate(request_names):
+            trans_id,trans_ra,trans_dec = trans_data[i]
+            sct = SkyCoord(trans_ra,trans_dec,unit=u.deg)
             print(f"Getting photometry: {i} out of {rn_len} done", end='\r')
             phot_results_link = f'{phot_link}/{request_name}/'
             phot_page = requests.get(url=phot_results_link)
             if phot_page.status_code != 200:
-                raise RuntimeError('results page {phot_results_link} does not exist')
+                raise RuntimeError('Results page {phot_results_link} does not exist')
 
             tree = html.fromstring(phot_page.content)
             fitsfiles = tree.xpath('//a/text()')
             for f in fitsfiles:
                 if 'detectability' in f:
-                    phot_fits_link = f'{phot_link}/{request_name}/{f}'
+                    phot_fits_link = f'{phot_results_link}/{f}'
                     fits_response = requests.get(url=phot_fits_link,stream=True)
 
-                    # this is a pain but it seems necessary
+                    # this is a pain but it seems necessary - D. Jones
                     tmpfits = tempfile.NamedTemporaryFile(delete=False)
                     shutil.copyfileobj(fits_response.raw, tmpfits)
                     tmpfits.close()
                     ff = fits.open(tmpfits.name)
                     os.remove(tmpfits.name)
-                    for i in range(len(ff[1].data)):
+                    for j in range(len(ff[1].data)):
                         mjd = ff[0].header['MJD-OBS']
                         exptime = ff[0].header['EXPTIME']
                         filt = ff[0].header['FPA.FILTER'].split('.')[0]
                         zpt = ff[0].header['FPA.ZP']
                         factor = fluxToMicroJansky(1, exptime, zpt)
-                        flux = factor * ff[1].data['PSF_INST_FLUX'][i]
-                        flux_err = factor * ff[1].data['PSF_INST_FLUX_SIG'][i]
+                        flux = factor * ff[1].data['PSF_INST_FLUX'][j]
+                        flux_err = factor * ff[1].data['PSF_INST_FLUX_SIG'][j]
+                        cam = ff[0].header['FPA.INSTRUMENT']
                         # http://svn.pan-starrs.ifa.hawaii.edu/trac/ipp/browser/trunk/psModules/src/objects/pmSourceMasks.h?order=name
-                        # saturated, diff spike, ghost, off chip
-                        #bad_flags = ['0x00001000','0x20000000','0x40000000','0x80000000']
-                        # saturation, defect
-                        #0x00000080, 0x00000800
-                        if ff[1].data['PSF_QF'][i] < 0.9 or \
-                           (ff[1].data['FLAGS'][i] & 0x00001000) or \
-                           (ff[1].data['FLAGS'][i] & 0x20000000) or \
-                           (ff[1].data['FLAGS'][i] & 0x40000000) or \
-                           (ff[1].data['FLAGS'][i] & 0x80000000) or \
-                           (ff[1].data['FLAGS'][i] & 0x00000080) or \
-                           (ff[1].data['FLAGS'][i] & 0x00000800): dq = 1.0
+                        # FLAGS corresponding to diff spike, ghost, off chip, saturated, defect, saturation
+                        # 0x20000000, 0x40000000, 0x80000000, 0x00001000, 0x00000800, 0x00000080
+                        if ff[1].data['PSF_QF'][j] < 0.9 or \
+                           (ff[1].data['FLAGS'][j] & 0x20001880) or \
+                           (ff[1].data['FLAGS'][j] & 0x40001880) or \
+                           (ff[1].data['FLAGS'][j] & 0x80001880): dq = 1.0
                         else: dq = 0.0
                         try: stack_id = ff[0].header['PPSUB.REFERENCE'].split('.')[-3]
                         except: stack_id = None
-                        ra, dec = ff[1].data['RA_PSF'][i], ff[1].data['DEC_PSF'][i]
+
+                        ra, dec = ff[1].data['RA_PSF'][j], ff[1].data['DEC_PSF'][j]
                         sc = SkyCoord(ra,dec,unit=u.deg)
                         sep = sc.separation(sct).arcsec
-                        if np.min(sep) > 2:
-                            raise RuntimeError(f'Couldn\'t find transient match for RA,Dec={ra:.7f},{dec:.7f}')
-                        tn = trans_list[np.argmin(sep)]
-                        if tn not in phot_dict.keys():
-                            phot_dict[tn] = {'mjd':[],'filt':[],'diff_flux':[],'diff_err':[],'dq':[],'stack_id':[],
-                                             'diff_id':[],'ra':[],'dec':[],'exptime':[],'zpt':[],'camera':[]}
 
-                        phot_dict[tn]['mjd'] += [mjd]
-                        phot_dict[tn]['filt'] += [filt]
-                        phot_dict[tn]['diff_flux'] += [flux]
-                        phot_dict[tn]['diff_err'] += [flux_err]
-                        phot_dict[tn]['dq'] += [dq]
-                        phot_dict[tn]['stack_id'] += [stack_id]
-                        phot_dict[tn]['diff_id'] += [f.split('.')[2]]
-                        phot_dict[tn]['ra'] += [ra]
-                        phot_dict[tn]['dec'] += [dec]
-                        phot_dict[tn]['exptime'] += [exptime]
-                        phot_dict[tn]['zpt'] += [zpt]
-                        phot_dict[tn]['camera'] += [ff[0].header['FPA.INSTRUMENT']]
+                        if np.min(sep) > 2: print(f'Couldn\'t find transient match for RA,Dec={ra:.7f},{dec:.7f}!')
+                        elif not self.options.keepnans and np.isnan((flux,flux_err)).sum(): pass
+                        elif stack_id not in [None, 'NULL']: phot_table.add_row((trans_id,stack_id,mjd,filt,exptime,zpt,flux,flux_err,dq,ra,dec,cam))
+
         print(f"Getting photometry: {rn_len} out of {rn_len} done")
-        return phot_dict
+        return phot_table
 
-    def write_photometry(self,phot_dict,stack_dict):
-        for t in stack_dict.keys():
-            phot_table = at.Table(phot_dict[t])
-            if not self.options.keepnans:
-                phot_fin = [~np.isnan(row['diff_flux']) and ~np.isnan(row['diff_err']) for row in phot_table]
-                phot_table = phot_table[phot_fin]
-            stack_table = at.Table(stack_dict[t])
-            if not (len(phot_table) * len(stack_table)): continue
-            data_table = at.join(phot_table,stack_table['stack_image_id','gal_flux','gal_err','gal_flag'],
+    def write_photometry(self,phot_table,stack_table):
+        """
+        Combines the forced photometry and stack photometry tables together before saving the contents in a file
+
+        parameters
+        --------
+        phot_table : astropy Table; contains the results of the difference image photometry
+        stack_table: astropy Table; contains the results of the stack image photometry
+        """
+
+        gals = np.unique(stack_table['transient_id'])
+        for gal in gals:
+            phot_match = phot_table['transient_id'] == gal
+            stack_match = stack_table['transient_id'] == gal
+            if not phot_match.sum() * stack_match.sum(): print(f"{'Diff' if stack_match.sum() else 'Stack'} data for {gal} empty!"); continue
+            data_table = at.join(phot_table[phot_match]['stack_id','mjd','filt','exp_time','zpt','diff_flux','diff_err','dq'],
+                                 stack_table[stack_match]['stack_image_id','gal_flux','gal_err','gal_flag'],
                                  keys_left='stack_id',keys_right='stack_image_id')
-            if not len(data_table): continue
+            if not len(data_table): print(f"No stack and difference image matches for {gal}!"); continue
             data_table['flux'] = data_table['gal_flux'] + data_table['diff_flux']
             data_table['flux_err'] = np.sqrt(data_table['gal_err']**2 + data_table['diff_err']**2)
 
-            with open(f"{self.options.outdir}/{t}_phot.dat",'w') as fout:
-                print('mjd filt exp_time zpt diff_flux diff_err gal_flux gal_err flux flux_err gal_flag dq',file=fout)
-                for m,f,exp,zpt,df,dfe,gf,gfe,fl,fle,flag,dq in data_table['mjd','filt','exptime','zpt','diff_flux','diff_err','gal_flux','gal_err','flux','flux_err','gal_flag','dq']:
+            with open(f"{self.options.outdir}/{gal}_phot.dat",'w') as fout:
+                print("mjd filt exp_time zpt diff_flux diff_err gal_flux gal_err flux flux_err gal_flag dq",file=fout)
+                for _,m,f,exp,zpt,df,dfe,dq,_,gf,gfe,flag,fl,fle in data_table:
                     print(f"{m:.3f} {f} {exp} {zpt:.4f} {df:.4f} {dfe:.4f} {gf:.4f} {gfe:.4f} {fl:.4f} {fle:.4f} {flag} {dq}",file=fout)
-        
         return
-    
-    def get_stamps(self,request_name,coord_data):
+
+    def get_stamps(self,request_name,coord_data,warning=False):
+        """
+        Parses the results of the requested stack stamps, collecting the image link and other
+        information in a table
+
+        parameters
+        --------
+        request_name: str; name of stack images request sent to IPP
+        coord_data  : astropy Table; contains the transient name, ra, and dec
+
+        returns
+        --------
+        image_dict: dict; contains the IDs and links for the requested images (as well
+                    as coordinates)
+        """
 
         stamp_link = 'http://datastore.ipp.ifa.hawaii.edu/yse-pstamp-results/'
         stamp_fitsfile_link = stamp_link + f'{request_name}/'
         stamp_results_link = stamp_fitsfile_link + 'results.mdc'
         
         stamps_page = requests.get(url=stamp_results_link)
-        if stamps_page.status_code != 200:
-            raise RuntimeError(f'results page {stamp_results_link} does not exist')
-        
+        if stamps_page.status_code != 200: raise RuntimeError(f'Results page {stamp_results_link} does not exist')
         mdc_stamps = parse_mdc(stamps_page.text)
 
-        #tree = html.fromstring(stamps_page.content)
-        #fitsfiles = tree.xpath('//a/text()')
-        
-        image_dict = {}
-
+        image_table = at.Table(names=('transient_id','stack_image_link','stack_image_id','ra','dec'),dtype=(str,str,str,float,float))
         for k in mdc_stamps.keys():
             err = mdc_stamps[k]['ERROR_STR']
-            #print(k, err)
             if 'SUCCESS' not in err:
-                print(f'warning: part of job {request_name} failed! {k} has error {err}')
-            #elif err in ['PSTAMP_NO_VALID_PIXELS','PSTAMP_NO_IMAGE_MATCH']:
-            #    pass
+                if warning: print(f'Warning: part of job {request_name} failed, {k} has error {err}')
             else:
-                img_name,img_type,transient,mjd,img_id,img_filter,img_camera = \
-                    mdc_stamps[k]['IMG_NAME'],mdc_stamps[k]['IMG_TYPE'],mdc_stamps[k]['COMMENT'].split('.')[-1],\
-                    float(mdc_stamps[k]['MJD_OBS']),mdc_stamps[k]['ID'],mdc_stamps[k]['FILTER'].split('.')[0],\
-                    mdc_stamps[k]['PROJECT']
-
-                if transient not in image_dict.keys():
-                    image_dict[transient] = {'stack_image_link':[],'stack_image_id':[],'stack_image_mjd':[],
-                                             'stack_image_filter':[],'stack_image_camera':[],'ra':[],'dec':[]}
-                id_match = (coord_data['stack_id']==img_id)
-                if img_type == 'stack' and img_id not in image_dict[transient]['stack_image_id']:
-                    image_dict[transient]['stack_image_link'] += [f'{stamp_fitsfile_link}/{img_name}']
-                    image_dict[transient]['stack_image_id'] += [img_id]
-                    image_dict[transient]['stack_image_mjd'] += [mjd]
-                    image_dict[transient]['stack_image_filter'] += [img_filter]
-                    image_dict[transient]['stack_image_camera'] += [img_camera]
-                    image_dict[transient]['ra'] += [coord_data['ra'][id_match]]
-                    image_dict[transient]['dec'] += [coord_data['dec'][id_match]]
+                img_name, img_type = mdc_stamps[k]['IMG_NAME'], mdc_stamps[k]['IMG_TYPE']
+                transient, img_id = mdc_stamps[k]['COMMENT'].split('.')[-1], mdc_stamps[k]['ID']
+                match = coord_data['transient_id'] == transient
+                _,ra,dec = coord_data[match].values()
+                if img_type == 'stack' and img_id not in image_table['stack_image_id']:
+                    link = f'{stamp_fitsfile_link}/{img_name}'
+                    image_table.add_row((transient,link,img_id,ra,dec))
                 elif img_type not in ['stack','warp','diff']: 
                     raise RuntimeError(f'image type {img_type} not found')
 
-        return image_dict
+        return image_table
  
     def get_status(self,request_name,warning=False):
-        
+        """
+        Retrieves the status of a request sent to the IPP
+
+        parameters
+        --------
+        request_name: str; name of the request previously sent to the IPP
+
+        returns
+        --------
+        done: bool; boolean indicating whether or not the request is ready
+        """
+
         status_link = 'http://pstamp.ipp.ifa.hawaii.edu/status.php'
         session = requests.Session()
         session.auth = (self.options.ifauser,self.options.ifapass)
-        page = session.post(status_link)
-        page = session.post(status_link)	#Why is this necessary? It is, but why?
+        session.post(status_link)					#First session returns cookie in header
+        page = session.post(status_link)				#Second session returns page
         
         if page.status_code == 200:
             lines_out = []
@@ -541,84 +640,84 @@ class YSE_Forced_Pos:
             tbl = at.Table.read(text,format='ascii',delimiter='|',data_start=1,header_start=0)
 
             idx = tbl['name'] == request_name
-            if not len(tbl[idx]):
+            if not idx.sum():
                 if warning: print(f'warning: could not find request named {request_name}')
-                return False, False
+                return False
             if tbl['Completion Time (UTC)'][idx]: done = True
             else: done = False
 
             jobs = float(tbl['Total Jobs'][idx])
             jobs_succ = float(tbl['Successful Jobs'][idx])
-            success = jobs == jobs_succ
-            if not success and warning: print(f'warning: {jobs-jobs_succ} of {jobs} jobs failed')
+            if jobs_succ != jobs and warning: print(f'warning: {jobs-jobs_succ} of {jobs} jobs failed')
         else:
             print(f'Error occured with request {request_name}')
-            done = success = False
-        return done,success
+            done = False
+        return done
 
-    def get_gal_flux(self,img_dict):
+    def get_gal_flux(self,img_data):
+        """
+        Downloads each stack image stamp, performs aperture photometry, and returns the results
+
+        parameters
+        --------
+        img_data: astropy Table; contains the name, stack image link and ID, and coordinates (ra & dec)
+                  for the transients
+
+        returns
+        --------
+        gal_table: astropy Table; contains the names, stack IDs, stack flux and error, and a quality flag
+                   for each of the transients
+        """
 
         basedir = self.options.outdir
         session = requests.Session()
         session.auth = (self.options.ifauser,self.options.ifapass)
 
-        gal_dict = copy.deepcopy(img_dict)
-        gals = list(gal_dict.keys())
-        for k in gals:
-            gal_dict[k]['gal_flux'] = []
-            gal_dict[k]['gal_err'] = []
-            gal_dict[k]['gal_flag'] = []
-            if not self.options.nofitsdownload:
-                gal_dict[k]['stack_file'] = []
-                gal_dict[k]['stack_file'+'_png'] = []
+        gal_table = at.Table(names=('transient_id','stack_image_id','gal_flux','gal_err','gal_flag'),dtype=(str,str,float,float,float))
+        for trans_id,link,img_id,ra,dec in img_data:
+            if img_id is None: continue 
+            outdir = f"{basedir}/{trans_id}/{img_id}"
+            if not os.path.exists(outdir): os.makedirs(outdir)
 
-            #session = requests.Session()
-            #session.auth = (self.options.ifauser,self.options.ifapass)
-            for i in range(len(gal_dict[k]['stack_image_link'])):
-                if gal_dict[k]['stack_image_link'][i] is None:
-                    gal_dict[k]['gal_flux'] += [None]
-                    gal_dict[k]['gal_err'] += [None]
-                    gal_dict[k]['gal_flag'] += [None]
-                    if not self.options.nofitsdownload:
-                        gal_dict[k]['stack_file'] += [None]
-                        gal_dict[k]['stack_file'+'_png'] += [None]
-                    continue
-                        
-                outdir = f"{basedir}/{k}/{int(gal_dict[k]['stack_image_mjd'][i])}"
-                if not os.path.exists(outdir): os.makedirs(outdir)
+            filename = link.split('/')[-1]
+            outfile = f"{outdir}/{filename}"
 
-                filename = gal_dict[k]['stack_image_link'][i].split('/')[-1]
-                outfile = f"{outdir}/{filename}"
-                    
-                fits_response = session.get(gal_dict[k]['stack_image_link'][i],stream=True)
-                with open(outfile,'wb') as fout:
-                    shutil.copyfileobj(fits_response.raw, fout)
+            fits_response = session.get(link,stream=True)
+            with open(outfile,'wb') as fout: shutil.copyfileobj(fits_response.raw, fout)
+            ff = fits.open(outfile)
 
-                ff = fits.open(outfile)
+            pos = SkyCoord(ra,dec,unit=u.deg)
+            ap = SkyCircularAperture(pos, r = 2.5*u.arcsec)
+            ap_pix = ap.to_pixel(WCS(ff[1].header)) 
+            apstats = ApertureStats(ff[1].data, ap_pix)
+            factor =  10**0.44 * ff[1].header['EXPTIME']
 
-                pos = SkyCoord(gal_dict[k]['ra'][i], gal_dict[k]['dec'][i], unit=u.deg)
-                ap = SkyCircularAperture(pos, r = 2.5*u.arcsec)
-                ap_pix = ap.to_pixel(WCS(ff[1].header)) 
-                apstats = ApertureStats(ff[1].data, ap_pix)
-                factor =  10**0.44 * ff[1].header['EXPTIME']
-                gal_dict[k]['gal_flux'] += [apstats.sum[0] / factor]
-                gal_dict[k]['gal_err']  += [apstats.std[0] / factor]
-                gal_dict[k]['gal_flag'] += [1.0 if apstats.sum[0]/apstats.std[0] < 5 else 0.0]
+            flux = apstats.sum / factor
+            flux_err = apstats.std / factor
+            flag = 1.0 if apstats.sum/apstats.std < 5 else 0.0
+            gal_table.add_row((trans_id,img_id,flux,flux_err,flag))
 
-                if self.options.nofitsdownload:
-                     shutil.rmtree(outdir)
-                else:
-                    fits_to_png(ff,outfile.replace('fits','png'))
-                    gal_dict[k]['stack_file'] += [outfile.replace('{basedir}/','')]
-                    gal_dict[k]['stack_file'+'_png'] += [outfile.replace('{basedir}/','').replace('.fits','.png')]
+            if self.options.nofitsdownload: shutil.rmtree(outdir)
+            else: fits_to_png(ff,outfile.replace('fits','png'))
 
-            if np.prod(gal_dict[k]['gal_flag']): del gal_dict[k]
-            updir = outdir.rsplit('/',1)[0]
+        gals = np.unique(gal_table['transient_id'])
+        for gal in gals:
+            match = gal_table['transient_id'] == gal
+            flag_set = gal_table[match]['gal_flag']
+            if np.prod(flag_set): gal_table = gal_table[~match]
+            updir = f"{basedir}/{gal}"
             if not len(os.listdir(updir)): os.rmdir(updir)
 
-        return gal_dict
+        return gal_table
 
     def submit_to_ipp(self,filename_or_obj):
+        """
+        Submits a request to the IPP from a file or fits table object
+
+        parameters
+        ---------
+        filename_or_obj: str or fits file object: reuest to be sent to the IPP
+        """
 
         session = requests.Session()
         session.auth = (self.options.ifauser,self.options.ifapass)
@@ -630,55 +729,53 @@ class YSE_Forced_Pos:
         if type(filename_or_obj) == str: files = {'filename':open(filename,'rb')}
         else: files = {'filename':filename_or_obj.getvalue()}
         page = session.post(stampurl, files=files)
-
     
     def main(self):
+        """
+        Parses the information given at runtime and sends the target transients to be analyzed
+        """
 
-        if self.options.ra is not None and self.options.dec is not None and self.options.name is not None:
+        if self.options.coordlist is not None:
+            targets = at.Table.read(self.options.coordlist, names=['transient_id','ra','dec'], data_start=0)
+            keep = [not os.path.exists(f'{self.options.outdir}/{obj}_phot.dat') for obj in targets['transient_id']] if self.options.checkfiles else np.ones_like(targets['transient_id'], dtype=bool)
+            if np.sum(keep): self.all_stages(targets[keep])
+        else:
             if self.options.checkfiles and os.path.exists(f'{self.options.outdir}/{self.options.name}_phot.dat'): pass
-            else: self.all_stages([self.options.name],[self.options.ra],[self.options.dec])
-        elif self.options.coordlist is not None:
-            name,ra,dec = np.loadtxt(self.options.coordlist,delimiter=',',dtype=str,unpack=True)
-            ra,dec = ra.astype(float),dec.astype(float)
-            keep = [not os.path.exists(f'{self.options.outdir}/{obj}_phot.dat') for obj in name] if self.options.checkfiles else np.ones_like(name, dtype=bool)
-            if np.array(keep).sum(): self.all_stages(name[keep],ra[keep],dec[keep])
+            else: self.all_stages(at.Table([[self.options.name],[self.options.ra],[self.options.dec]], names=['transient_id','ra','dec']))
 
-    def all_stages(self,namelist,ralist,declist):
-        #### main function ####
+    def all_stages(self,targets):
+        """ 
+        Performs all of the functions on a list of transients to analyze, saving the resulting fluxes in
+        files for each object
 
+        parameters
+        ---------
+        targets: astropy Table; contains the names and coordinates (ra & dec) of each transient
+        """
 
         ### 1. query the YSE-PZ API for all obs matching ra/dec ###
-        # returns diff_id, warp_id, filter, camera
         # this might be slow if the list is long!
-        obs_data_dict = {}
-        total_images = 0
-
         if self.options.use_csv:
             csvdata = at.Table.read(self.options.csv_filename,format='ascii.csv')
             scall = SkyCoord(csvdata['radeg'],csvdata['decdeg'],unit=u.deg)
 
-        for name,ra,dec in zip(namelist,ralist,declist):
+        skycelldict = {}
+        obs_data = at.Table(names=('transient_id','ra','dec','filt','diff_id','obs_mjd','camera'),dtype=(str,float,float,str,str,float,str))
+        for name,ra,dec in targets:
             # construct an ra/dec box search
             # PanSTARRS images are 3.1x3.1 deg, approximately
             if self.options.use_csv:
                 sc = SkyCoord(ra,dec,unit=u.deg)
-                iClose = (sc.separation(scall).deg < 1.65) & np.isin(csvdata['diff_id'],['None','NULL'],invert=True)
-                if iClose.sum():
-                    obs_data_dict[name] = {}
-                    obs_data_dict[name]['ra'] = ra
-                    obs_data_dict[name]['dec'] = dec
-                    obs_data_dict[name]['results'] = [] #csvdata[iClose]
-                    for c in np.unique(csvdata[iClose]):
-                        obs_data_dict[name]['results'] += [{
-                            'survey_field':c['comment'],
-                            'photometric_band':c['filter'][0],
-                            'obs_mjd':date_to_mjd(c['dateobs']),
-                            'image_id':c['exp_name'],
-                            'diff_id':c['diff_id'],
-                            'warp_id':c['warp_id'],
-                            'stack_id':None}]
-                        total_images += iClose.size
+                iClose = (sc.separation(scall).deg < 1.65) & np.isin(csvdata['diff_id'],[None,'None','NULL'],invert=True)
+                if iClose.sum() >= 1000: raise RuntimeWarning("There are more than 1000 images containing this coordinate!")
+                elif iClose.sum(): skycelldict[name] = 'skycell.'+getskycell(ra,dec,self.options.ifauser,self.options.ifapass)
                 else: print(f"Object {name} not found in YSE fields")
+                for c in np.unique(csvdata[iClose]):
+                    cam = get_camera(c['exp_name'])
+                    filt = c['filter'][0]
+                    mjd = date_to_mjd(c['dateobs'])
+                    diff_id = c['diff_id']
+                    obs_data.add_row((name,ra,dec,filt,diff_id,mjd,cam))
 
             else:
                 ramin,ramax,decmin,decmax = getRADecBox(ra,dec,size=3.0)
@@ -691,7 +788,7 @@ class YSE_Forced_Pos:
                         auth=HTTPBasicAuth(self.options.ysepzuser,self.options.ysepzpass))
 
                     if obs_data_response.status_code != 200:
-                        raise RuntimeError('issue communicating with the YSE-PZ server')
+                        raise RuntimeError('Issue communicating with the YSE-PZ server')
                     obs_data = obs_data_response.json()
                     obs_data_results = obs_data['results']
 
@@ -721,34 +818,17 @@ class YSE_Forced_Pos:
                 total_images += len(obs_data_results)
 
                 # we have to loop through because we have a 100-image limit here
-                if len(obs_data_results) == 1000:
-                    raise RuntimeWarning("""
+                if iClose.sum() >= 1000: raise RuntimeWarning("""
 There are more than 1000 images containing this coordinate!
 Somebody needs to write a smarter code than this one to parse through all the data.
 For now, doing first 1000 images only.
 """)
 
-        if total_images == 0:
-            print('No images were found')
-            return
-            
         ### 2. stamp images & photometry ###
-        gals = list(obs_data_dict.keys())
-        for i, k in enumerate(gals):
-            if not len(obs_data_dict[k]['results']): del obs_data_dict[k]; continue
-            key_table = at.Table(obs_data_dict[k]['results'])['obs_mjd','photometric_band','image_id','diff_id','stack_id']
-            key_table = key_table[np.isin(key_table['diff_id'].astype('str'),['None','NULL'],invert=True)]
-            if not self.options.use_csv:
-                key_table['photometric_band'] = [phot_band_dict[band] for band in key_table['photometric_band']]
-            key_table['transient_id'] = [k] * len(key_table)
-            key_table['ra'] = [obs_data_dict[k]['ra']] * len(key_table)
-            key_table['dec'] = [obs_data_dict[k]['dec']] * len(key_table)
-            key_table['camera'] = [get_camera(img) for img in key_table['image_id']]
-            key_table = at.Table(key_table, dtype=[float,*[str]*5,float,float,str])
-            obs_table = at.vstack([obs_table,key_table]) if i else key_table.copy()
-
-        if not len(obs_table): print('Images are all missing diff IDs'); return
-        phot_request_names,skycelldict = self.request_forcedphot(obs_table)
+        if not len(obs_data): print('No observations found!'); return
+        observed = [obs in np.unique(obs_data['transient_id']) for obs in targets['transient_id']]
+        targets = targets[observed]
+        phot_request_names = self.request_forcedphot(targets,obs_data,skycelldict)
         
         ### 2c) check status of the stamp images/photometry jobs ###
         max_time = 15
@@ -757,51 +837,39 @@ For now, doing first 1000 images only.
         jobs, jobs_done = len(phot_request_names), 0
         tstart = time.time()
         while jobs_done < jobs and time.time()-tstart < max_time*60:
-            #print('waiting 60 seconds to check status...')
             time.sleep(60)
             jobs_done = 0
-            for phot_request_name in phot_request_names:
-                done_phot,success_phot = self.get_status(phot_request_name)
-                jobs_done += done_phot
+            for phot_request_name in phot_request_names: jobs_done += self.get_status(phot_request_name)
             print(f"Requesting images: {jobs_done} out of {jobs} done", end='\r')
         print(f"Requesting images: {jobs_done} out of {jobs} done")
 
-        if jobs_done < jobs:
-            raise RuntimeError('job timeout!')
+        if jobs_done < jobs: raise RuntimeError('Diff request timeout!')
 
         ### 2d) download the stamp images
         # save the data
-        phot_dict = self.get_phot(phot_request_names,obs_table['transient_id','ra','dec'])
+        diff_table = self.get_phot(phot_request_names,targets)
+        if not len(diff_table): print('No difference images found!'); return
 
         ### 3. template images
         ### 3a) request the templates
-        phot_table = at.Table([])
-        for i,k in enumerate(phot_dict.keys()):
-            key_table = at.Table(phot_dict[k])['stack_id','ra','dec','camera']
-            key_table['transient_id'] = [k] * len(key_table)
-            phot_table = at.vstack([phot_table,key_table]) if i else key_table.copy()
-
-        if not len(phot_table): raise RuntimeError('No images found!')
-        stack_table = at.Table(np.unique(phot_table))
-        stack_request_name,skycelldict = self.request_templates(stack_table,skycelldict=skycelldict)
-        print(f'Submitted stack request {stack_request_name}')
+        stack_table = at.Table(np.unique(diff_table['transient_id','stack_id','ra','dec','camera']))
+        stack_request_name = self.request_templates(stack_table,skycelldict)
+        print(f'Submitted stack request {stack_request_name}...')
 
         ### 3b) check status of the templates
         job_done = False
         tstart = time.time()
         while not job_done and time.time()-tstart < max_time*60:
-            #print('waiting 60 seconds to check status...')
             time.sleep(60)
-            done_stamp,success_stamp = self.get_status(stack_request_name)
-            job_done = done_stamp
-        if not success_stamp: pass
-        if not job_done: raise RuntimeError('job timeout!')
+            job_done = self.get_status(stack_request_name)
+        if not job_done: raise RuntimeError('Stack request timeout!')
 
         ### 3c) download the stamp images
         print("Downloading stamp images...")
-        stack_img_dict = self.get_stamps(stack_request_name, stack_table['stack_id','ra','dec'])
-        gal_flux_dict = self.get_gal_flux(stack_img_dict)
-        self.write_photometry(phot_dict, gal_flux_dict)        
+        stack_img_data = self.get_stamps(stack_request_name, targets)
+        if not len(stack_img_data): print("No stack data found!"); return
+        gal_table = self.get_gal_flux(stack_img_data)
+        self.write_photometry(diff_table, gal_table)        
 
         return
      
@@ -812,10 +880,11 @@ Takes an individual name/RA/dec (decimal degrees) or a list of name/RA/dec (comm
     Having a unique name for each ra/dec coord is just for bookkeeping purposes.
     
 Usage:
+    python YSE_Forced_Position.py -n <name> -r <ra> -d <dec> --use_csv
     python YSE_Forced_Position.py -n <name> -r <ra> -d <dec> -u <YSE-PZ username> -p <YSE-PZ password>
+    python YSE_Forced_Position.py -c <coordinate list> --use_csv
     python YSE_Forced_Position.py -c <coordinate list> -u <YSE-PZ username> -p <YSE-PZ password>
-"""
-    
+""" 
 
     ys = YSE_Forced_Pos()
 
@@ -823,15 +892,11 @@ Usage:
     args = parser.parse_args()
     ys.options = args
 
-    if ys.options.coordlist is None and (ys.options.ra is None or ys.options.dec is None or ys.options.name is None):
-        raise RuntimeError("""
-must specify name/ra/dec or coordlist arguments, run:
-        YSE_Forced_Position.py --help
-for more info
-""")
-        
-    if ys.options.coordlist is not None and not os.path.exists(ys.options.coordlist):
-        raise RuntimeError(f'coordinate list file {ys.options.coordlist} does not exist')
+    if ys.options.coordlist is None:
+        if None in [ys.options.ra,ys.options.dec,ys.options.name]:
+            raise RuntimeError('Must specify name/ra/dec or coordlist arguments, run:\n\tYSE_Forced_Position.py --help\nfor more info')
+    elif not os.path.exists(ys.options.coordlist):
+        raise RuntimeError(f'Coordinate list file {ys.options.coordlist} does not exist')
     
     ys.main()
 
