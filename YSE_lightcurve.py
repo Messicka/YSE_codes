@@ -767,7 +767,7 @@ class YSE_Forced_Pos:
             if self.options.use_csv:
                 sc = SkyCoord(ra,dec,unit=u.deg)
                 iClose = (sc.separation(scall).deg < 1.65) & np.isin(csvdata['diff_id'],[None,'None','NULL'],invert=True)
-                if iClose.sum() >= 1000: raise RuntimeWarning("There are more than 1000 images containing this coordinate!")
+                if iClose.sum() > 1000: raise RuntimeWarning("There are more than 1000 images containing this coordinate!")
                 elif iClose.sum(): skycelldict[name] = 'skycell.'+getskycell(ra,dec,self.options.ifauser,self.options.ifapass)
                 else: print(f"Object {name} not found in YSE fields")
                 for c in np.unique(csvdata[iClose]):
@@ -789,11 +789,11 @@ class YSE_Forced_Pos:
 
                     if obs_data_response.status_code != 200:
                         raise RuntimeError('Issue communicating with the YSE-PZ server')
-                    obs_data = obs_data_response.json()
-                    obs_data_results = obs_data['results']
+                    obs_data_results = obs_data_response.json()['results']
 
-                elif ramin < 0:
-                    ramin += 360
+                else:
+                    ramin %= 360
+                    ramax %= 360
                     # might have to do two queries
                     query_str_1 = f"ra_gt={ramin}&dec_gt={decmin}&dec_lt={decmax}&status_in=Successful&limit=100"
                     query_str_2 = f"ra_lt={ramax}&dec_gt={decmin}&dec_lt={decmax}&status_in=Successful&limit=100"
@@ -811,18 +811,14 @@ class YSE_Forced_Pos:
                     obs_data_2 = obs_data_response_2.json()
                     obs_data_results = np.append(obs_data_1['results'],obs_data_2['results'])
 
-                obs_data_dict[name] = {}
-                obs_data_dict[name]['ra'] = ra
-                obs_data_dict[name]['dec'] = dec
-                obs_data_dict[name]['results'] = obs_data_results
-                total_images += len(obs_data_results)
-
-                # we have to loop through because we have a 100-image limit here
-                if iClose.sum() >= 1000: raise RuntimeWarning("""
-There are more than 1000 images containing this coordinate!
-Somebody needs to write a smarter code than this one to parse through all the data.
-For now, doing first 1000 images only.
-""")
+                image_counts = 0
+                for c in np.unique(at.Table(obs_data_results)):
+                    cam = get_camera(c['image_id'])
+                    filt = phot_band_dict[c['photometric_band']]
+                    mjd = c['obs_mjd']
+                    diff_id = c['diff_id']
+                    if filt and diff_id: obs_data.add_row((name,ra,dec,filt,diff_id,mjd,cam)); image_counts += 1
+                if image_counts > 1000: raise RuntimeWarning("There are more than 1000 images containing this coordinate!")
 
         ### 2. stamp images & photometry ###
         if not len(obs_data): print('No observations found!'); return
