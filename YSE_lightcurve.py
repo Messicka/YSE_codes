@@ -702,9 +702,9 @@ class YSE_Forced_Pos:
 
         gals = np.unique(gal_table['transient_id'])
         for gal in gals:
-            match = gal_table['transient_id'] == gal
-            flag_set = gal_table[match]['gal_flag']
-            if np.prod(flag_set): gal_table = gal_table[~match]
+            #match = gal_table['transient_id'] == gal
+            #flag_set = gal_table[match]['gal_flag']
+            #if np.prod(flag_set): gal_table = gal_table[~match]
             updir = f"{basedir}/{gal}"
             if not len(os.listdir(updir)): os.rmdir(updir)
 
