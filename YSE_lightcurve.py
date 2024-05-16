@@ -612,7 +612,7 @@ class YSE_Forced_Pos:
 
         return image_table
  
-    def get_status(self,request_name,warning=False):
+    def get_status(self,request_names,warning=False):
         """
         Retrieves the status of a request sent to the IPP
 
@@ -632,26 +632,29 @@ class YSE_Forced_Pos:
         page = session.post(status_link)				#Second session returns page
         
         if page.status_code == 200:
-            lines_out = []
-            for line in page.text.split('<pre>')[-1].split('\n'):
-                if line and '------------------' not in line and '/pre' not in line:
-                    lines_out += [line[1:]]
-            text = '\n'.join(lines_out)
-            tbl = at.Table.read(text,format='ascii',delimiter='|',data_start=1,header_start=0)
+            done = 0
+            for request_name in request_names:
+                lines_out = []
+                for line in page.text.split('<pre>')[-1].split('\n'):
+                    if line and '------------------' not in line and '/pre' not in line:
+                        lines_out += [line[1:]]
+                text = '\n'.join(lines_out)
+                tbl = at.Table.read(text,format='ascii',delimiter='|',data_start=1,header_start=0)
 
-            idx = tbl['name'] == request_name
-            if not idx.sum():
-                if warning: print(f'warning: could not find request named {request_name}')
-                return False
-            if tbl['Completion Time (UTC)'][idx]: done = True
-            else: done = False
+                idx = tbl['name'] == request_name
+                if not idx.sum():
+                    if warning: print(f'warning: could not find request named {request_name}')
+                    done += 0
+                    continue
+                if tbl['Completion Time (UTC)'][idx]: done += 1
+                else: done += 0
 
-            jobs = float(tbl['Total Jobs'][idx])
-            jobs_succ = float(tbl['Successful Jobs'][idx])
-            if jobs_succ != jobs and warning: print(f'warning: {jobs-jobs_succ} of {jobs} jobs failed')
+                jobs = float(tbl['Total Jobs'][idx])
+                jobs_succ = float(tbl['Successful Jobs'][idx])
+                if jobs_succ != jobs and warning: print(f'warning: {jobs-jobs_succ} of {jobs} jobs failed')
         else:
             print(f'Error occured with request {request_name}')
-            done = False
+            done = 0
         return done
 
     def get_gal_flux(self,img_data):
@@ -835,7 +838,8 @@ class YSE_Forced_Pos:
         while jobs_done < jobs and time.time()-tstart < max_time*60:
             time.sleep(60)
             jobs_done = 0
-            for phot_request_name in phot_request_names: jobs_done += self.get_status(phot_request_name)
+            jobs_done = self.get_status(phot_request_names)
+            #for phot_request_name in phot_request_names: jobs_done += self.get_status(phot_request_name)
             print(f"Requesting images: {jobs_done} out of {jobs} done", end='\r')
         print(f"Requesting images: {jobs_done} out of {jobs} done")
 
@@ -857,7 +861,7 @@ class YSE_Forced_Pos:
         tstart = time.time()
         while not job_done and time.time()-tstart < max_time*60:
             time.sleep(60)
-            job_done = self.get_status(stack_request_name)
+            job_done = self.get_status([stack_request_name])
         if not job_done: raise RuntimeError('Stack request timeout!')
 
         ### 3c) download the stamp images
